@@ -1,0 +1,359 @@
+---
+title: "EU 2014 Elections: Newspapers EU Evaluations & Reader's EU Attitudes"
+author: "Michelle Schimmel"
+output:
+  html_document: default
+date: "2023-02-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = TRUE, echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+```{r libraries, include = FALSE}
+#load the tidyverse packages
+library(tidyverse)
+library(lubridate)
+library(RColorBrewer)
+library(ggtext)
+
+content_data <- read_csv("Dataset MCA EPE 2014 NL FINAL.csv")
+survey_data  <- read_csv("All waves GENERAL.csv")
+```
+
+#### Visualisation Description
+
+This visualisation is based on a survey of Dutch adults and a content analysis of three Dutch newspapers (de Telegraaf, de Volkskrant and NRC Handelsblad). 
+The survey assessed EU attitudes in four waves leading up to the EU election. The content analysis contained the three newspapers' evaluations of the EU in individual newspaper articles for the total time span. 
+
+On this basis, this visualisation set out to uncover the ways in which a newspaper's EU reporting may affect their readership's attitudes toward the EU -- does more negative evaluations between the survey waves result in more negative EU attitudes (and vice versa)? For this, each outlet's mean EU evaluation per week was mapped to the mean EU attitudes of their readership as a whole in a given wave. One indicator that an outlets' EU evaluation affects the attitudes of their readers can be seen for the Volkskrant between December and April. In this time period, the Volkskrants' published news stories became increasingly negative. At the same time, compared to Volkskrant readers' EU attitudes in late December, the readers' attitudes in April became more negative. Conversely, a deviation from this pattern is visible for the Telegraaf: despite more positive EU evaluations in news stories from Mid-February until Mid-March, readership EU attitudes appear to have remained unchanged.
+The comparison between the news outlets and their readership also shows that the EU evaluation of the Telegraaf generally appears lower than that of the Volkskrant or the NRC Handelsblad. Moreover, the Telegraaf's readership appears to hold more negative EU attitudes compared to the readerships of the Volkskrant and NRC Handelsblad.
+
+```{r content data michelle, echo = FALSE, warning= FALSE, message = FALSE, include=FALSE}
+#Tidying content data & creating needed variables 
+
+content_EU <- content_data %>%
+  
+  # Create surrogate key so each row represents a unique coded news item
+  mutate(key = make.unique(as.character(V2)))%>%
+  
+  # Create Date variable from day, month, year columns, which are seperate
+  unite(date, V3a, V3b, V3c, sep = "/", remove=FALSE) %>% 
+  mutate(date = dmy(date))%>%
+  
+  # create week variable from Date to later get weekly EU evaluations 
+  mutate(week = week(date))%>%
+  
+  # Create tibble only containing the variables needed for newspapers' EU evaluations 
+  # 1. Filter to only included cases in which newspapers were analysed (remove TV), filter only for the Netherlands, filter to only include newspapers
+  filter(NP1 != "NA", V5=="The Netherlands", !V4=="nu.nl") %>% 
+  
+  # 2. Only select needed variables
+  select(key, date, week, V4, V11, -c(TV1:TV2))%>%
+  
+  # 3. Rename V4 to outlet
+  rename(outlet = V4, 
+         eu_eval = V11)%>%
+  
+  #Examining eu_eval in the codebook: 
+  # 1 = 	negative
+  # 2 = 	rather negative
+  # 3 = 	balanced/mixed
+  # 4 =	  rather positive
+  # 5 = 	positive 
+  # 9 = 	not applicable / not mentioned
+  # 0 = 	mentioned but not evaluated
+
+  #Examining eu_eval in the data:
+    # table(content_EU$eu_eval)
+    # this yields labels 
+  
+  # Recoding EU news article evaluation variable character values to range from negative (0) to positive (4) and renaming to   eu_eval
+   mutate(eu_eval = recode (eu_eval, 
+          "Negative" = "0",
+          "Rather negative" = "1", 
+          "Balanced/mixed" = "2", 
+          "Rather positive " = "3", 
+          "Positive" = "4", 
+          "Not applicable / not mentioned" = "9",
+          "Mentioned but not evaluated" = "10"), 
+          eu_eval=as.numeric(eu_eval))%>%
+  
+  #Only include EU evaluations, remove not applicable and mentioned but not evaluated (9 and 10)
+  filter(!eu_eval==9, !eu_eval==10)%>%
+
+# Create mean evaluation per outlet per week
+  group_by(week, outlet)%>%
+  mutate(mean_eval_outlets = mean(eu_eval, na.rm=TRUE), n = n())%>%
+  ungroup()
+
+# Check the primary key of this table -- key is primary key, each unit represents one news item
+content_EU%>%
+  count(key)%>%
+  filter(1>n)
+```
+
+```{r survey I michelle, echo = FALSE, warning= FALSE, message = FALSE, include=FALSE}
+# preparing the personal survey data table to create both attitude tibble and exposure tibble
+
+survey_data_m <- survey_data %>%
+  
+  # Create date variable from w1_DATUM:w4_DATUM 
+  mutate(date_w1 = ymd(w1_DATUM),
+         date_w2 = ymd(w2_DATUM), 
+         date_w3 = ymd(w3_DATUM), 
+         date_w4 = ymd(w4_DATUM))%>%
+  
+  # Create week variable from dates to get weeks of survey 
+  mutate(week_w1 = week(date_w1), 
+         week_w2 = week(date_w2), 
+         week_w3 = week(date_w3), 
+         week_w4 = week(date_w4))%>%
+
+  # Only include people who people who participated in all four waves so exposure & changes are shown among same group of people
+  filter_at(vars(date_w1, date_w2, date_w3, date_w4), all_vars(!is.na(.)))
+```
+
+```{r survey II michelle, echo = FALSE, warning= FALSE, message = FALSE, include=FALSE}
+#Subset survey data frame to only contain EU attitudes 
+
+# EU attitude items: 
+## w1_q26_1:9  
+## w2_q22_1:9 
+## w3_q28_1:9 
+## w4_q31_1:9 
+
+ attitudes <- survey_data_m%>%
+    select(INTNR, 
+       week_w1, week_w2, week_w3, week_w4,
+       w1_q26_1:w1_q26_9,w2_q22_1:w2_q22_9, w3_q28_1:w3_q28_9,
+                     w4_q31_1:w4_q31_9) %>%
+  
+  # Change all columns that are part of the EU attitude and wave to numeric. These   columns are the only character columns left in the tibble, so can parse as number all at once.
+  mutate(across(where(is.character), parse_number))%>%
+  
+  # recode all EU attitude items to range from 0 (negative a.) to 6 (positive a.) for better visualisation.
+  mutate_at(vars( w1_q26_1:w1_q26_9,w2_q22_1:w2_q22_9, w3_q28_1:w3_q28_9,
+                     w4_q31_1:w4_q31_9), funs(recode(.,
+                                                     "1" = "0",
+                                                     "2" = "1", 
+                                                     "3" = "2", 
+                                                     "4" = "3", 
+                                                     "5" = "4", 
+                                                     "6" = "5", 
+                                                     "7" = "6")))%>%
+  # mutate again to get numeric 
+  mutate(across(where(is.character), parse_number))%>%
+
+  # Create single composite score of EU attitudes per person from the different attitude items with high
+  # numbers representing favourable attitudes and low numbers unfavourable attitudes per person per "week" /i.e., wave
+  group_by(INTNR)%>%
+  mutate(aEU_w1 = mean(c_across(w1_q26_1:w1_q26_9), na.rm = TRUE),
+         aEU_w2 = mean(c_across(w2_q22_1:w2_q22_9), na.rm = TRUE),
+         aEU_w3 = mean(c_across(w3_q28_1:w3_q28_9), na.rm = TRUE),
+         aEU_w4 = mean(c_across(w4_q31_1:w4_q31_9), na.rm = TRUE))%>%
+  ungroup()%>%
+
+   # Only select final variables to tidy the data table
+  select(INTNR,
+         #date_w1, date_w2, date_w3, date_w4,
+         week_w1, week_w2, week_w3, week_w4,
+         aEU_w1, aEU_w2, aEU_w3, aEU_w4)%>%
+
+# pivot the table to get week, wave and EU attitudes
+pivot_longer(cols = -INTNR, 
+             names_sep="_", 
+             names_to = c(".value", "wave"))%>%
+  
+  #change wave to numeric for consistency with content data frame
+mutate(wave = parse_number(wave))
+  
+  
+# Determine primary key of attitudes
+attitudes %>% 
+  count(INTNR, wave) %>% 
+  filter(n > 1)
+
+# INTNR, wave represents the primary key of "attitudes". 
+# Each unit in "attitudes" represents an individuals' attitude 
+# in a given wave.
+# Therefore, each observation becomes one row.
+
+```
+
+```{r news exposure michelle, echo = FALSE, warning= FALSE, message = FALSE, include=FALSE}
+# News exposure tibble 
+
+#Outlet overview:   
+#1. De Telegraaf 
+#2. NRC Handelsblad
+#3. NRC Next
+#4. Algemeen Dagblad (AD)
+#5. Wedding
+#6. De Volkskrant
+#7. Metro
+#8. striker
+#9. A regional or local newspaper
+#10. News on the radio 
+
+# Content analysis only contains Telegraf, NRC Handelsblad & Volkskrant
+# only select these (1, 2, 6)
+
+news_exposure <- survey_data_m%>%
+  
+  #select identifier, weeks, as well as the three outlets in each wave
+  select(INTNR, 
+         #date_w1, date_w2, date_w3, date_w4,
+         week_w1, week_w2, week_w3, week_w4,
+         w1_q50_1, w1_q50_2, w1_q50_6,
+         w2_q45_1, w2_q45_2, w2_q45_6, 
+         w3_q44_1, w3_q44_2, w3_q44_6, 
+         w4_q48_1, w4_q48_2, w4_q48_6)%>%
+  
+  #change character variables to numeric 
+  mutate((across(where(is.character), parse_number)))%>%
+  
+  #rename for easier manipulation
+  rename(tel_w1 = w1_q50_1, 
+         NRC_w1 = w1_q50_2, 
+         vk_w1 = w1_q50_6, 
+         tel_w2 = w2_q45_1, 
+         NRC_w2 = w2_q45_2, 
+         vk_w2 = w2_q45_6, 
+         tel_w3 = w3_q44_1, 
+         NRC_w3 = w3_q44_2, 
+         vk_w3 = w3_q44_6, 
+         tel_w4 = w4_q48_1, 
+         NRC_w4 = w4_q48_2, 
+         vk_w4 = w4_q48_6)%>%
+
+# Pivot tibble such that wave, week, and individual outlet use have
+  pivot_longer(cols = -INTNR, 
+               names_sep="_",
+               names_to=c(".value", "wave"))%>%
+  
+  # parse wave as number for consistency
+  mutate(wave = parse_number(wave))%>%
+  
+   # Group by INTNR and only keep those cases who filled out the NP items across the four waves so the graph shows change (because wave 1+2+3+4=10)
+  group_by(INTNR)%>%
+  filter(sum(wave)==10)%>%
+    ungroup()%>%
+
+# Rename for consistency with content EU data frame  
+  rename("NRC Handelsblad" = "NRC", 
+         "de Telegraaf" = "tel", 
+         "de Volkskrant" = "vk") %>% 
+  
+  pivot_longer(cols= c(`NRC Handelsblad`, `de Telegraaf`, `de Volkskrant`), 
+              names_to="outlet", 
+              values_to ="use")
+  
+  # create "loyal readership" variable, where the most used paper across all waves is the same 
+  most_used <- news_exposure %>% 
+    
+  #Group by INTNR and wave and filter for most used news outlets for each person and wave and remove where people have no most used outlet. 
+  group_by(INTNR, wave)%>%
+  filter(use == max(use) & !use==0)%>%
+    
+  # Filter again so only individuals remain who have read the same outlet across four waves 
+    filter(n_distinct(outlet)==1)%>%
+    ungroup()%>%
+    #> WOULD IT BE A PROBLEM IF A READER APPEARS FOR MORE THAN ONBE NEWSPAPER?
+    
+    #group again by INTNR and only keep individuals with data across all four waves. The resulting data table now only contains individuals whose most read newspaper did not change across all four waves
+  group_by(INTNR)%>%
+  filter(sum(wave)==10)%>%
+    ungroup()
+  
+# For the primary keys: week or wave can be used interchangably.
+# Determine primary key of most_used
+most_used %>% 
+  count(INTNR, wave) %>% 
+  filter(n > 1)
+
+
+# Determine primary key of news_exposure
+news_exposure %>% 
+  count(INTNR, wave, outlet) %>% 
+  filter(n > 1)
+
+```
+
+```{r join I michelle, echo = FALSE, warning= FALSE, message = FALSE, include=FALSE}
+# Join the news exposure and attitudes data tables to generate the final attitude variable of interest: The mean attitude of all people who are loyal newspaper readers in a given wave.
+
+# Use left join to attach "attitudes" variables to "most used" and join as natural because both contain the same first four vars
+survey_final <- most_used%>%
+  left_join(attitudes)
+  
+# Determine primary key of survey_final
+survey_final %>% 
+  count(INTNR, week) %>% 
+  filter(n > 1)
+
+```
+
+```{r join II michelle, echo = FALSE, warning= FALSE, message = FALSE}
+# Join survey_final and the content analysis by week and outlet
+visualisation <- content_EU%>%
+  full_join(survey_final, by=c("week", "outlet"))%>%
+  
+# To get the mean attitude of the whole newspaper readership per week, group by wave and newspaper.
+  group_by(week, outlet)%>%
+  mutate(reader_att = mean(aEU, na.rm=TRUE))%>%
+  ungroup()%>%
+  
+# make both scales range from 0 to 1, such that 0 represents negative attitudes/evaluations, 1 represents positive attitudes/evaluations
+  mutate(n.mean_eval_outlets=(mean_eval_outlets-0)/(4),
+       n.reader_att=(reader_att-1)/(7-1))
+
+```
+
+```{r visualisation michelle, echo = FALSE, warning= FALSE, message = FALSE}
+
+# As the plot is faceted, to use geom_text later on, each label for the correct corresponding facet is saved as data frame in the first step
+reader_label <- data.frame(outlet = "de Volkskrant", 
+                      label =  "Reader\nEU attitudes\ndrop")
+np_label <- data.frame(outlet = "de Volkskrant", 
+                      label =  "Newspaper\nEU evaluation\ndrops")
+
+#map the date to the x axis and the reader attitude to the y axis. 
+ggplot(data = visualisation, 
+       mapping = aes(x = date, y= n.reader_att))+
+  
+#plot reader attitude to the corresponding date with points, setting the colour to green and size to 2
+  geom_point(colour= '#238E68', size=2)+
+  
+#create line to connect reader attitude dots, exclude NA to ensure the readership's attitudes from one time point to the next can be connected. Set colour to green and set the line to be a dashed line
+  geom_line(data=visualisation[!is.na(visualisation$n.reader_att),], colour= '#238E68', linetype='dashed')+
+  
+# map the newspaper evaluation variable to the y axis-- as both variables are scaled to range from 0 to 1, no second y axis needs to be created. This also avoids distorted/false reading of the data for the general audience. Create a line which tracks the mean evaluation per outlet for each week, set the colour to yellow
+  geom_line(mapping=aes(y=n.mean_eval_outlets), colour='#EEB422')+
+  
+# facet wrap by outlet, such that the individual outlets & their corresponding readership appear in one facet.
+  facet_wrap(~outlet)+
+
+# use extension ggtext to create the headline and subtitle with added specifications (e.g., **=bold, <br>=line breaks) and change the colours of the variables in the subtitle to the corresponding colours in the plot. In this way, the subtitle also becomes a legend 
+  labs(x = " ", y = " ", title = "<span style='font-size:16pt'>**Do Newspapers' EU Evaluations Shape their Readers'<br>EU Attitudes?**<br>
+    <span style='font-size:13pt'>Mean <span style='color:#EEB422;'>EU evaluations in Dutch newspaper articles</span> per week leading up to the<br>2014 EU-Election and the development of their
+    <span style='color:#238E68;'>readers' mean EU attitudes</span>
+</span>")+
+  
+# create annotations in the "Volkskrant" facet to point out pattern in the data to the reader to invite reflection on both its reocurrence and deviations thereof. set the position, size, colour, text alignment, label and refer to the facet data frames created in the first step
+    geom_text(x = as.Date("2014-03-15"), y = 0.1, size = 7/.pt, colour='#238E68', hjust=0, aes(label = label), data = reader_label)+
+   geom_text(x = as.Date("2013-12-20"), y = 0.5, size = 7/.pt, colour='#EEB422', hjust=0, aes(label = label), data = np_label)+
+
+# set theme to classic to set overall plot appearance
+  theme_classic()+
+
+# set theme specifications. plot.title & legend.text are specified in a way to work well with markdown. In the third step, the axis tick labels are set to be angled 45 degrees for flawless knitting
+  theme(
+    plot.title = element_markdown(lineheight = 1.2),
+    legend.text = element_markdown(size = 11), 
+    axis.text.y = element_text(angle = 45))+
+
+#change y-axis labels from numbers to their "meaning"-- in this way, both eu evaluations and eu attitudes can be interpreted easily using only one axis
+  scale_y_continuous(labels=c("0.00" = "Negative", "0.25" = " ", "0.50" = "Balanced", "0.75" = " ", "1.00" = "Positive"))
+
+```
